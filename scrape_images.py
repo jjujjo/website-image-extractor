@@ -42,16 +42,26 @@ except ImportError:
 # (named after "name") under BASE_OUTPUT_DIR, with its own log and resume state,
 # so multiple sites (e.g. stc + its subsidiaries) can be crawled in one run
 # without their images/logs mixing together.
+#
+# "sitemap_url" is optional - if omitted, it's auto-discovered from the site's
+# robots.txt ("Sitemap:" line), falling back to "<base_url>/sitemap.xml" if
+# robots.txt has none. Set it explicitly if a site uses a non-standard path
+# (like stc's AEM-style sitemap below).
 SITES = [
     {
         "name": "stc",
+        "base_url": "https://www.stc.com.sa",
         "sitemap_url": "https://www.stc.com.sa/content/stc/sa.sitemap.xml",
     },
-    # Add subsidiary sites here, e.g.:
-    # {
-    #     "name": "stc-pay",
-    #     "sitemap_url": "https://stcpay.com.sa/sitemap.xml",
-    # },
+    {"name": "channels", "base_url": "https://channels.com.sa"},
+    {"name": "solutions", "base_url": "https://solutions.com.sa"},
+    {"name": "center3", "base_url": "https://center3.com"},
+    {"name": "stcbank", "base_url": "https://stcbank.com.sa"},
+    {"name": "sccc", "base_url": "https://sccc.sa"},
+    {"name": "stcsc", "base_url": "https://www.stcsc.sa"},
+    {"name": "sirar", "base_url": "https://www.sirar.com.sa"},
+    {"name": "iotsquared", "base_url": "https://iotsquared.com.sa"},
+    {"name": "aqalat", "base_url": "https://aqalat.com.sa"},
 ]
 
 # Output
@@ -149,6 +159,25 @@ def fetch_with_retries(session, url, logger, stream=False):
 # =============================================================================
 
 SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+
+def discover_sitemap_url(session, base_url, logger):
+    """Look up a site's sitemap via robots.txt ("Sitemap:" line), falling
+    back to "<base_url>/sitemap.xml" if robots.txt has none / is missing."""
+    robots_url = urljoin(base_url, "/robots.txt")
+    resp = fetch_with_retries(session, robots_url, logger)
+    if resp is not None:
+        for line in resp.text.splitlines():
+            line = line.strip()
+            if line.lower().startswith("sitemap:"):
+                candidate = line.split(":", 1)[1].strip()
+                if candidate:
+                    logger.info("Discovered sitemap via robots.txt: %s", candidate)
+                    return candidate
+
+    fallback = urljoin(base_url, "/sitemap.xml")
+    logger.info("No sitemap listed in robots.txt - falling back to %s", fallback)
+    return fallback
 
 
 def parse_sitemap(session, sitemap_url, logger, seen_sitemaps=None):
@@ -370,16 +399,19 @@ def download_image(session, image_url, output_dir, downloaded_urls, existing_fil
 # MAIN CRAWL LOOP
 # =============================================================================
 
-def crawl_site(session, site_name, sitemap_url, output_dir):
+def crawl_site(session, site_name, base_url, sitemap_url, output_dir):
     """Crawl a single site end-to-end. Returns the stats dict for this site."""
     os.makedirs(output_dir, exist_ok=True)
     logger = setup_logging(output_dir)
 
     logger.info("=== Starting crawl of '%s' at %s ===", site_name, datetime.now().isoformat())
-    logger.info("Sitemap: %s", sitemap_url)
     logger.info("Output dir: %s", output_dir)
     if not PIL_AVAILABLE:
         logger.warning("Pillow not installed - dimension filtering disabled (only file-size filter applied)")
+
+    if not sitemap_url:
+        sitemap_url = discover_sitemap_url(session, base_url, logger)
+    logger.info("Sitemap: %s", sitemap_url)
 
     page_urls = parse_sitemap(session, sitemap_url, logger)
     page_urls = sorted(set(page_urls))
@@ -465,7 +497,7 @@ def main():
 
     for site in SITES:
         output_dir = os.path.join(BASE_OUTPUT_DIR, site["name"])
-        crawl_site(session, site["name"], site["sitemap_url"], output_dir)
+        crawl_site(session, site["name"], site["base_url"], site.get("sitemap_url"), output_dir)
 
 
 if __name__ == "__main__":
