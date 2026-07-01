@@ -39,17 +39,22 @@ except ImportError:
 # =============================================================================
 
 # Sites to crawl - one entry per site. Each site gets its own output subfolder
-# (named after "name") under BASE_OUTPUT_DIR, with its own log and resume state,
-# so multiple sites (e.g. stc + its subsidiaries) can be crawled in one run
-# without their images/logs mixing together.
+# (named after "name", or "output_subdir" if given) under BASE_OUTPUT_DIR, with
+# its own log and resume state, so multiple sites (e.g. stc + its subsidiaries)
+# can be crawled in one run without their images/logs mixing together.
 #
 # "sitemap_url" is optional - if omitted, it's auto-discovered from the site's
 # robots.txt ("Sitemap:" line), falling back to "<base_url>/sitemap.xml" if
 # robots.txt has none. Set it explicitly if a site uses a non-standard path
 # (like stc's AEM-style sitemap below).
+#
+# "output_subdir" is optional - defaults to "name". Set it to reuse an
+# existing folder from a prior run (like stc's "website" folder below) so
+# already-downloaded images/resume-state carry over instead of starting fresh.
 SITES = [
     {
         "name": "stc",
+        "output_subdir": "website",
         "base_url": "https://www.stc.com.sa",
         "sitemap_url": "https://www.stc.com.sa/content/stc/sa.sitemap.xml",
     },
@@ -498,7 +503,7 @@ def main():
     session = requests.Session()
 
     for site in SITES:
-        output_dir = os.path.join(BASE_OUTPUT_DIR, site["name"])
+        output_dir = os.path.join(BASE_OUTPUT_DIR, site.get("output_subdir", site["name"]))
         crawl_site(session, site["name"], site["base_url"], site.get("sitemap_url"), output_dir)
 
 
