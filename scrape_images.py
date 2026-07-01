@@ -18,6 +18,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -187,6 +188,28 @@ def discover_sitemap_url(session, base_url, logger):
     return fallback
 
 
+def _parse_sitemap_lenient(session, sitemap_url, xml_text, logger, seen_sitemaps):
+    """Fallback for sitemaps with invalid XML (e.g. unescaped '&' in URLs):
+    regex out every <loc>...</loc> directly instead of using a strict parser."""
+    locs = [m.strip() for m in re.findall(r"<loc>(.*?)</loc>", xml_text, re.IGNORECASE | re.DOTALL)]
+    if not locs:
+        logger.error("Lenient extraction found no <loc> entries in %s", sitemap_url)
+        return []
+
+    nested = [u for u in locs if u.lower().endswith(".xml")]
+    pages = [u for u in locs if not u.lower().endswith(".xml")]
+
+    urls = []
+    if nested:
+        logger.info("Lenient parse: found %d nested sitemap(s) in %s", len(nested), sitemap_url)
+        for nested_url in nested:
+            urls.extend(parse_sitemap(session, nested_url, logger, seen_sitemaps))
+    if pages:
+        logger.info("Lenient parse: found %d page URL(s) in %s", len(pages), sitemap_url)
+        urls.extend(pages)
+    return urls
+
+
 def parse_sitemap(session, sitemap_url, logger, seen_sitemaps=None):
     """Recursively parse a sitemap or sitemap-index and return a list of page URLs."""
     if seen_sitemaps is None:
@@ -204,8 +227,11 @@ def parse_sitemap(session, sitemap_url, logger, seen_sitemaps=None):
     try:
         root = ElementTree.fromstring(resp.content)
     except ElementTree.ParseError as exc:
-        logger.error("Failed to parse sitemap XML at %s: %s", sitemap_url, exc)
-        return []
+        logger.warning(
+            "Strict XML parse failed for %s (%s) - falling back to lenient <loc> extraction",
+            sitemap_url, exc,
+        )
+        return _parse_sitemap_lenient(session, sitemap_url, resp.text, logger, seen_sitemaps)
 
     tag = root.tag.lower()
     urls = []
@@ -502,7 +528,18 @@ def main():
     os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
     session = requests.Session()
 
-    for site in SITES:
+    # Optionally restrict to specific sites by name, e.g.:
+    #   python scrape_images.py channels tawal iotsquared aqalat
+    # Useful for re-running only the sites that failed on a prior run.
+    requested_names = set(sys.argv[1:])
+    sites_to_run = [s for s in SITES if not requested_names or s["name"] in requested_names]
+
+    if requested_names:
+        unknown = requested_names - {s["name"] for s in SITES}
+        if unknown:
+            print(f"Unknown site name(s), ignoring: {', '.join(sorted(unknown))}")
+
+    for site in sites_to_run:
         output_dir = os.path.join(BASE_OUTPUT_DIR, site.get("output_subdir", site["name"]))
         crawl_site(session, site["name"], site["base_url"], site.get("sitemap_url"), output_dir)
 
