@@ -43,6 +43,7 @@ BASE_URL = "https://www.stc.com.sa"
 # Output
 OUTPUT_DIR = r"C:\Users\jood1\Downloads\stc-images\website"
 LOG_FILENAME = "scrape_log.txt"
+PROCESSED_PAGES_FILENAME = "processed_pages.txt"  # resume support: pages fully handled in a prior run
 
 # Image filtering thresholds
 MIN_WIDTH = 200          # skip images narrower than this (pixels)
@@ -294,6 +295,21 @@ def load_existing_filenames(output_dir):
     return set(os.listdir(output_dir))
 
 
+def load_processed_pages(output_dir):
+    """Resume support: pages that were fully processed (fetched + all images handled) in a prior run."""
+    path = os.path.join(output_dir, PROCESSED_PAGES_FILENAME)
+    if not os.path.isfile(path):
+        return set()
+    with open(path, "r", encoding="utf-8") as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def mark_page_processed(output_dir, page_url):
+    path = os.path.join(output_dir, PROCESSED_PAGES_FILENAME)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(page_url + "\n")
+
+
 def download_image(session, image_url, output_dir, downloaded_urls, existing_filenames, logger):
     if image_url in downloaded_urls:
         return "duplicate"
@@ -360,11 +376,16 @@ def main():
     logger.info("Total pages to crawl: %d", len(page_urls))
 
     existing_filenames = load_existing_filenames(OUTPUT_DIR)
+    processed_pages = load_processed_pages(OUTPUT_DIR)
     downloaded_urls = set()
+
+    if processed_pages:
+        logger.info("Resume: %d page(s) already fully processed in a prior run - will be skipped", len(processed_pages))
 
     stats = {
         "pages_ok": 0,
         "pages_failed": 0,
+        "pages_skipped": 0,
         "images_found": 0,
         "images_downloaded": 0,
         "images_skipped_small": 0,
@@ -373,7 +394,14 @@ def main():
         "images_failed": 0,
     }
 
+    # Results that required no network request - don't count toward image download delay
+    NO_REQUEST_RESULTS = ("duplicate", "already_exists")
+
     for i, page_url in enumerate(page_urls, start=1):
+        if page_url in processed_pages:
+            stats["pages_skipped"] += 1
+            continue
+
         logger.info("[%d/%d] Processing page: %s", i, len(page_urls), page_url)
 
         resp = fetch_with_retries(session, page_url, logger)
@@ -399,15 +427,18 @@ def main():
                 stats["images_already_existing"] += 1
             elif result == "failed":
                 stats["images_failed"] += 1
-            time.sleep(IMAGE_DELAY_SECONDS)
+            if result not in NO_REQUEST_RESULTS:
+                time.sleep(IMAGE_DELAY_SECONDS)
 
+        mark_page_processed(OUTPUT_DIR, page_url)
+        processed_pages.add(page_url)
         time.sleep(PAGE_DELAY_SECONDS)
 
     logger.info("=== Crawl finished at %s ===", datetime.now().isoformat())
     logger.info(
-        "Pages OK: %d | Pages failed: %d | Images found: %d | Downloaded: %d | "
+        "Pages OK: %d | Pages failed: %d | Pages skipped (resumed): %d | Images found: %d | Downloaded: %d | "
         "Skipped(small): %d | Skipped(dup): %d | Already on disk: %d | Failed: %d",
-        stats["pages_ok"], stats["pages_failed"], stats["images_found"],
+        stats["pages_ok"], stats["pages_failed"], stats["pages_skipped"], stats["images_found"],
         stats["images_downloaded"], stats["images_skipped_small"],
         stats["images_skipped_duplicate"], stats["images_already_existing"],
         stats["images_failed"],
