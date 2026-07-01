@@ -62,6 +62,8 @@ SITES = [
     {"name": "sirar", "base_url": "https://www.sirar.com.sa"},
     {"name": "iotsquared", "base_url": "https://iotsquared.com.sa"},
     {"name": "aqalat", "base_url": "https://aqalat.com.sa"},
+    {"name": "tawal", "base_url": "https://www.tawal.com.sa"},
+    {"name": "upsource", "base_url": "https://upsource.com.sa"},
 ]
 
 # Output
