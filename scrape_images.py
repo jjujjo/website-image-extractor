@@ -2,14 +2,16 @@
 """
 Website image crawler/downloader.
 
-Crawls a website (using its sitemap.xml for page discovery), finds all
-<img> and srcset images on each page, and downloads them to a local
-folder for use as an image-generation training dataset.
+Crawls one or more websites (using each site's sitemap.xml for page
+discovery), finds all <img> and srcset images on each page, and downloads
+them to a local folder for use as an image-generation training dataset.
 
 Usage:
     python scrape_images.py
 
 All key parameters are configurable in the CONFIGURATION section below.
+Add one entry per site to SITES to crawl multiple sites in one run - each
+site gets its own output subfolder, log file, and resume state.
 """
 
 import hashlib
@@ -36,12 +38,24 @@ except ImportError:
 # CONFIGURATION - edit these values as needed
 # =============================================================================
 
-# Site / sitemap
-SITEMAP_URL = "https://www.stc.com.sa/content/stc/sa.sitemap.xml"
-BASE_URL = "https://www.stc.com.sa"
+# Sites to crawl - one entry per site. Each site gets its own output subfolder
+# (named after "name") under BASE_OUTPUT_DIR, with its own log and resume state,
+# so multiple sites (e.g. stc + its subsidiaries) can be crawled in one run
+# without their images/logs mixing together.
+SITES = [
+    {
+        "name": "stc",
+        "sitemap_url": "https://www.stc.com.sa/content/stc/sa.sitemap.xml",
+    },
+    # Add subsidiary sites here, e.g.:
+    # {
+    #     "name": "stc-pay",
+    #     "sitemap_url": "https://stcpay.com.sa/sitemap.xml",
+    # },
+]
 
 # Output
-OUTPUT_DIR = r"C:\Users\jood1\Downloads\stc-images\website"
+BASE_OUTPUT_DIR = r"C:\Users\jood1\Downloads\stc-images"
 LOG_FILENAME = "scrape_log.txt"
 PROCESSED_PAGES_FILENAME = "processed_pages.txt"  # resume support: pages fully handled in a prior run
 
@@ -356,27 +370,26 @@ def download_image(session, image_url, output_dir, downloaded_urls, existing_fil
 # MAIN CRAWL LOOP
 # =============================================================================
 
-def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    logger = setup_logging(OUTPUT_DIR)
+def crawl_site(session, site_name, sitemap_url, output_dir):
+    """Crawl a single site end-to-end. Returns the stats dict for this site."""
+    os.makedirs(output_dir, exist_ok=True)
+    logger = setup_logging(output_dir)
 
-    logger.info("=== Starting crawl at %s ===", datetime.now().isoformat())
-    logger.info("Sitemap: %s", SITEMAP_URL)
-    logger.info("Output dir: %s", OUTPUT_DIR)
+    logger.info("=== Starting crawl of '%s' at %s ===", site_name, datetime.now().isoformat())
+    logger.info("Sitemap: %s", sitemap_url)
+    logger.info("Output dir: %s", output_dir)
     if not PIL_AVAILABLE:
         logger.warning("Pillow not installed - dimension filtering disabled (only file-size filter applied)")
 
-    session = requests.Session()
-
-    page_urls = parse_sitemap(session, SITEMAP_URL, logger)
+    page_urls = parse_sitemap(session, sitemap_url, logger)
     page_urls = sorted(set(page_urls))
     if MAX_PAGES:
         page_urls = page_urls[:MAX_PAGES]
 
     logger.info("Total pages to crawl: %d", len(page_urls))
 
-    existing_filenames = load_existing_filenames(OUTPUT_DIR)
-    processed_pages = load_processed_pages(OUTPUT_DIR)
+    existing_filenames = load_existing_filenames(output_dir)
+    processed_pages = load_processed_pages(output_dir)
     downloaded_urls = set()
 
     if processed_pages:
@@ -416,7 +429,7 @@ def main():
         stats["images_found"] += len(image_urls)
 
         for image_url in sorted(image_urls):
-            result = download_image(session, image_url, OUTPUT_DIR, downloaded_urls, existing_filenames, logger)
+            result = download_image(session, image_url, output_dir, downloaded_urls, existing_filenames, logger)
             if result == "downloaded":
                 stats["images_downloaded"] += 1
             elif result == "skipped_small":
@@ -430,11 +443,11 @@ def main():
             if result not in NO_REQUEST_RESULTS:
                 time.sleep(IMAGE_DELAY_SECONDS)
 
-        mark_page_processed(OUTPUT_DIR, page_url)
+        mark_page_processed(output_dir, page_url)
         processed_pages.add(page_url)
         time.sleep(PAGE_DELAY_SECONDS)
 
-    logger.info("=== Crawl finished at %s ===", datetime.now().isoformat())
+    logger.info("=== Crawl of '%s' finished at %s ===", site_name, datetime.now().isoformat())
     logger.info(
         "Pages OK: %d | Pages failed: %d | Pages skipped (resumed): %d | Images found: %d | Downloaded: %d | "
         "Skipped(small): %d | Skipped(dup): %d | Already on disk: %d | Failed: %d",
@@ -443,6 +456,16 @@ def main():
         stats["images_skipped_duplicate"], stats["images_already_existing"],
         stats["images_failed"],
     )
+    return stats
+
+
+def main():
+    os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
+    session = requests.Session()
+
+    for site in SITES:
+        output_dir = os.path.join(BASE_OUTPUT_DIR, site["name"])
+        crawl_site(session, site["name"], site["sitemap_url"], output_dir)
 
 
 if __name__ == "__main__":
